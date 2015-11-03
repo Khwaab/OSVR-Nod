@@ -1,15 +1,26 @@
 /** @file
-    @brief Comprehensive example: Implementation of a dummy Hardware Detect
-   Callback that creates a dummy device when it is "detected"
+    @brief Nod Plugin Implementation for OSVR
 
-    @date 2014
+    Enables Nod Data to be sent from the Nod service
+    into the OSVR server and used as an osvr object
+
+    Exposes:
+    3 analog (joystick x, joystick y, trigger)
+    10 buttons
+    1 Pose (x, y and z are still in development but orientation works)
+
+    these are exposed one per a nod device that this plugin detects.
+    Note: currently hardware detection does not refresh, please pair your
+    Nod devices before running the OSVR server.
+
+    @date 2015
 
     @author
-    Sensics, Inc.
-    <http://sensics.com/osvr>
+    Nod, Inc
+    <http://www.nod.com/>
 */
 
-// Copyright 2014 Sensics, Inc.
+// Copyright 2015 Nod, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -43,13 +54,11 @@
 #define _USE_MATH_DEFINES
 #include <math.h>
 
-// Global device count for path incrementation
-int deviceCount = 0;
 
 // Anonymous namespace to avoid symbol collision
 namespace {
 
-void euler(const float& pitch, const float& roll, const float& yaw, double* mData)
+void euler(const float& pitch, const float& roll, const float& yaw, OSVR_OrientationState* state)
 {
     const float sinHalfYaw = (float)sin(yaw / 2.0f);
     const float cosHalfYaw = (float)cos(yaw / 2.0f);
@@ -58,19 +67,23 @@ void euler(const float& pitch, const float& roll, const float& yaw, double* mDat
     const float sinHalfRoll = (float)sin(roll / 2.0f);
     const float cosHalfRoll = (float)cos(roll / 2.0f);
 
-    mData[0] = cosHalfRoll * cosHalfPitch * cosHalfYaw
+    //W
+    state->data[0] = cosHalfRoll * cosHalfPitch * cosHalfYaw
         + sinHalfRoll * sinHalfPitch * sinHalfYaw;
-    mData[1] = cosHalfRoll * sinHalfPitch * sinHalfYaw
+    //X
+    state->data[1] = cosHalfRoll * sinHalfPitch * sinHalfYaw
         + cosHalfPitch * cosHalfYaw * sinHalfRoll;
-    mData[2] = cosHalfRoll * cosHalfPitch * sinHalfYaw
+    //Y
+    state->data[2] = cosHalfRoll * cosHalfPitch * sinHalfYaw
         - sinHalfRoll * cosHalfYaw * sinHalfPitch;
-    mData[3] = cosHalfYaw*sinHalfPitch*cosHalfRoll -
+    //Z
+    state->data[3] = cosHalfYaw*sinHalfPitch*cosHalfRoll -
         sinHalfYaw*cosHalfPitch*sinHalfRoll;
 }
 
 class Backspin {
 public:
-    Backspin(OSVR_PluginRegContext ctx) {
+    Backspin(OSVR_PluginRegContext ctx, int deviceNumber) {
         /// Create the initialization options
         OSVR_DeviceInitOptions opts = osvrDeviceCreateInitOptions(ctx);
 
@@ -79,8 +92,7 @@ public:
         osvrDeviceButtonConfigure(opts, &m_button, 10);
         osvrDeviceTrackerConfigure(opts, &m_orientation);
         /// Create the device token with the options
-        m_dev.initAsync(ctx, std::to_string(deviceCount).c_str(), opts);
-        deviceCount++;
+        m_dev.initAsync(ctx, std::to_string(deviceNumber).c_str(), opts);
 
         /// Send JSON descriptor
         m_dev.sendJsonDescriptor(NodOSVR);
@@ -124,14 +136,12 @@ void OpenSpatialEventFired(NodEvent ev)
     if (ev.type == EventType::EulerAngles)
     {
         Backspin* dev = devices.at(ev.sender);
-        double val[4];
-        euler(-ev.roll, -ev.pitch, ev.yaw, val);
         OSVR_OrientationState orientationval;
-        memcpy(orientationval.data, val, 4);
+        euler(-ev.roll, -ev.pitch, ev.yaw, &orientationval);
         OSVR_Pose3 pose;
         pose.rotation = orientationval;
         //TODO: when 6dof is implemented send translations
-        pose.translation = { 0,0,0 };
+        //pose.translation = { 0,0,0 };
         osvrDeviceTrackerSendPose(dev->m_dev, dev->m_orientation, &pose, 0);
     }
 }
@@ -148,7 +158,7 @@ class HardwareDetection {
                 std::cout << "[NOD PLUGIN] found device" << std::endl;
                 for (int i = 0; i < NodNumRings(); i++)
                 {
-                    Backspin* dev = new Backspin(ctx);
+                    Backspin* dev = new Backspin(ctx, i);
                     devices.push_back(dev);
                     osvr::pluginkit::registerObjectForDeletion(
                         ctx, dev);
